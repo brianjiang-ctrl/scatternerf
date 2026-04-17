@@ -69,6 +69,42 @@ CUDA_VISIBLE_DEVICES=0 python3 run.py --ginc <same_config_used_for_training> --s
 - `logs/scatternerf_dense_<scene>_<seed>/results.json` (MLP)
 - `logs/scatternerf_dense_<scene>_<seed>/results.json` for transformer run (use different `run.postfix` to avoid collisions).
 
+### Quick test checklist (recommended)
+Use this exact sequence to validate the transformer integration before long training:
+
+1. **Shape/forward smoke test (seconds)**  
+   Verifies both backbones return compatible tensor shapes.
+```bash
+python utils/test_transformer_scatternerf.py
+```
+
+2. **Short training sanity run (few minutes)**  
+   Confirms training/eval loop works end-to-end with tiny step budget:
+```bash
+CUDA_VISIBLE_DEVICES=0 python run.py \
+  --ginc configs/scatternerf/tnt_transformer.gin \
+  --scene_name Sequence00_left_right \
+  --ginb run.max_steps=200 \
+  --ginb run.log_every_n_steps=10 \
+  --ginb run.postfix=\"transformer_sanity\"
+```
+
+3. **Eval-only run (loads best checkpoint from sanity run)**  
+```bash
+CUDA_VISIBLE_DEVICES=0 python run.py \
+  --ginc configs/scatternerf/tnt_transformer.gin \
+  --scene_name Sequence00_left_right \
+  --ginb run.run_train=False \
+  --ginb run.postfix=\"transformer_sanity\"
+```
+
+4. **Metric comparison helper**  
+```bash
+python utils/compare_results.py \
+  --baseline logs/<mlp_run>/results.json \
+  --candidate logs/<transformer_run>/results.json
+```
+
 ### License
 Copyright (c) 2022 POSTECH, KAIST, and Kakao Brain Corp. All Rights Reserved.
 Licensed under the Apache License, Version 2.0 (see [LICENSE](https://github.com/kakaobrain/NeRF-Factory/tree/main/LICENSE) for details)
