@@ -1,0 +1,11 @@
+include "configs/scatternerf/tnt.gin"
+
+# Replace the MLP backbone with the transformer backbone.
+ScatterNeRF.backbone_type = "transformer"
+
+# Transformer width/depth for coarse/fine fields.
+NeRFTransformer.hidden_dim = 256
+NeRFTransformer.num_heads = 8
+NeRFTransformer.num_layers = 4
+NeRFTransformer.ff_dim = 512
+NeRFTransformer.dropout = 0.0

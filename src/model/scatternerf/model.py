@@ -118,6 +118,89 @@ class NeRFMLP(nn.Module):
 
 
 @gin.configurable()
+class NeRFTransformer(nn.Module):
+    def __init__(
+        self,
+        min_deg_point,
+        max_deg_point,
+        deg_view,
+        input_ch: int = 3,
+        input_ch_view: int = 3,
+        hidden_dim: int = 256,
+        num_heads: int = 8,
+        num_layers: int = 4,
+        ff_dim: int = 512,
+        dropout: float = 0.0,
+        num_rgb_channels: int = 3,
+        num_density_channels: int = 1,
+    ):
+        for name, value in vars().items():
+            if name not in ["self", "__class__"]:
+                setattr(self, name, value)
+
+        super(NeRFTransformer, self).__init__()
+
+        pos_size = ((max_deg_point - min_deg_point) * 2 + 1) * input_ch
+        view_pos_size = (deg_view * 2 + 1) * input_ch_view
+        token_size = pos_size + view_pos_size
+
+        self.input_layer = nn.Linear(token_size, hidden_dim)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=ff_dim,
+            dropout=dropout,
+            batch_first=True,
+            activation="relu",
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.density_layer = nn.Linear(hidden_dim, num_density_channels)
+        self.rgb_layer = nn.Linear(hidden_dim, num_rgb_channels)
+
+        init.xavier_uniform_(self.input_layer.weight)
+        init.xavier_uniform_(self.density_layer.weight)
+        init.xavier_uniform_(self.rgb_layer.weight)
+
+    def _positional_encoding(self, num_samples, dim, device, dtype):
+        pos = torch.arange(num_samples, device=device, dtype=dtype).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, dim, 2, device=device, dtype=dtype)
+            * (-np.log(10000.0) / dim)
+        )
+        pe = torch.zeros((num_samples, dim), device=device, dtype=dtype)
+        pe[:, 0::2] = torch.sin(pos * div_term)
+        pe[:, 1::2] = torch.cos(pos * div_term)
+        return pe
+
+    def forward(self, x, condition):
+        num_rays, num_samples, _ = x.shape
+        condition_tile = torch.tile(condition[:, None, :], (1, num_samples, 1))
+        tokens = torch.cat([x, condition_tile], dim=-1)
+
+        h = self.input_layer(tokens)
+        h = h + self._positional_encoding(
+            num_samples=num_samples,
+            dim=h.shape[-1],
+            device=h.device,
+            dtype=h.dtype,
+        ).unsqueeze(0)
+        h = self.encoder(h)
+        h = self.norm(h)
+
+        raw_density_fog = self.density_layer(h).reshape(
+            num_rays, num_samples, self.num_density_channels
+        )
+        raw_density = raw_density_fog[..., 0]
+        raw_rgb = self.rgb_layer(h).reshape(num_rays, num_samples, self.num_rgb_channels)
+
+        if self.num_density_channels == 2:
+            raw_is_fog = raw_density_fog[..., 1]
+            return raw_rgb, raw_density, raw_is_fog
+        return raw_rgb, raw_density
+
+
+@gin.configurable()
 class ScatterNeRF(nn.Module):
     def __init__(
         self,
@@ -130,6 +213,7 @@ class ScatterNeRF(nn.Module):
         use_viewdirs: bool = True,
         noise_std: float = 0.0,
         lindisp: bool = False,
+        backbone_type: str = "mlp",
 
     ):
         for name, value in vars().items():
@@ -143,14 +227,33 @@ class ScatterNeRF(nn.Module):
         self.rgb_activation = nn.Sigmoid()
         self.fog_activation = nn.Sigmoid()
         self.sigma_activation = nn.ReLU()
-        self.coarse_mlp = NeRFMLP(min_deg_point, max_deg_point, deg_view, num_density_channels = 1 )
-        self.fine_mlp = NeRFMLP(min_deg_point, max_deg_point, deg_view, num_density_channels = 1 )
-        self.fog_mlp = NeRFMLP(min_deg_point, max_deg_point, deg_view, 
-                                                        netdepth = 4,
-                                                        netwidth =128,
-                                                        netwidth_condition = 64,
-                                                        skip_layer = 2,
-                                                        num_density_channels = 1)
+        if self.backbone_type == "mlp":
+            backbone = NeRFMLP
+            fog_kwargs = {
+                "netdepth": 4,
+                "netwidth": 128,
+                "netwidth_condition": 64,
+                "skip_layer": 2,
+            }
+        elif self.backbone_type == "transformer":
+            backbone = NeRFTransformer
+            fog_kwargs = {
+                "hidden_dim": 128,
+                "ff_dim": 256,
+                "num_layers": 2,
+            }
+        else:
+            raise ValueError(f"Unknown ScatterNeRF backbone_type={self.backbone_type}")
+
+        self.coarse_mlp = backbone(min_deg_point, max_deg_point, deg_view, num_density_channels=1)
+        self.fine_mlp = backbone(min_deg_point, max_deg_point, deg_view, num_density_channels=1)
+        self.fog_mlp = backbone(
+            min_deg_point,
+            max_deg_point,
+            deg_view,
+            num_density_channels=1,
+            **fog_kwargs,
+        )
 
 
     def forward(self, rays, randomized, white_bkgd, near, far):

@@ -40,6 +40,35 @@ python3 run.py --ginc configs/[model]/[data].gin --scene [scene] --ginb run.run_
 # ex) CUDA_VISIBLE_DEVICES=0 python3 run.py --ginc configs/scatternerf/tnt.gin --scene_name Sequence00_left_right --ginb run.run_train=False
 ```
 
+## Transformer ScatterNeRF baseline
+This repo now supports swapping ScatterNeRF's MLP field with a transformer field network that keeps the same input/output contract:
+- Input: encoded 3D sample position + encoded view direction.
+- Output: RGB and density for the volume/fog branches.
+
+Use the provided transformer config:
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 run.py \
+  --ginc configs/scatternerf/tnt_transformer.gin \
+  --scene_name Sequence00_left_right
+```
+
+### How to compare MLP vs Transformer
+1. Train the original model:
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 run.py --ginc configs/scatternerf/tnt.gin --scene_name Sequence00_left_right
+```
+2. Train the transformer model:
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 run.py --ginc configs/scatternerf/tnt_transformer.gin --scene_name Sequence00_left_right
+```
+3. Evaluate either run (writes `results.json` under each log directory):
+```bash
+CUDA_VISIBLE_DEVICES=0 python3 run.py --ginc <same_config_used_for_training> --scene_name Sequence00_left_right --ginb run.run_train=False
+```
+4. Compare `test` values of PSNR / SSIM / LPIPS in:
+- `logs/scatternerf_dense_<scene>_<seed>/results.json` (MLP)
+- `logs/scatternerf_dense_<scene>_<seed>/results.json` for transformer run (use different `run.postfix` to avoid collisions).
+
 ### License
 Copyright (c) 2022 POSTECH, KAIST, and Kakao Brain Corp. All Rights Reserved.
 Licensed under the Apache License, Version 2.0 (see [LICENSE](https://github.com/kakaobrain/NeRF-Factory/tree/main/LICENSE) for details)
